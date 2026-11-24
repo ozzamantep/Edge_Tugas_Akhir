@@ -53,18 +53,12 @@
 // 2. PIN MAP BLUINO ESP32 IOT STARTER SHIELD
 // ============================================================================
 // Catatan Hardware Bluino ESP32 IoT Starter Shield (ESP32 DevKit V1 30-Pin):
-// - MPU6050 (0x68) dan OLED SSD1306 (0x3C) berbagi bus I2C hardware yang sama
-//   pada GPIO 21 (SDA) dan GPIO 22 (SCL). Karena alamat I2C berbeda, keduanya
-//   bekerja bersamaan tanpa bentrok.
+// - MPU6050 (0x68) menggunakan bus I2C hardware pada GPIO 21 (SDA) dan GPIO 22 (SCL).
 #define PIN_I2C_SDA 21
 #define PIN_I2C_SCL 22
-#define I2C_CLOCK_HZ 100000UL // Standard Mode 100 kHz agar OLED & MPU6050 di shield stabil
+#define I2C_CLOCK_HZ 100000UL // Standard Mode 100 kHz agar MPU6050 di shield stabil
 
 #define MPU6050_I2C_ADDR 0x68 // Alamat default MPU6050 (AD0 = GND)
-#define OLED_I2C_ADDR 0x3C    // Alamat default OLED SSD1306 128x64
-#define OLED_WIDTH 128
-#define OLED_HEIGHT 64
-#define OLED_RESET_PIN -1 // Sharing reset pin dengan ESP32
 
 // Slot Micro SD Card pada Bluino ESP32 Starter Shield (bus VSPI standar ESP32)
 #define PIN_SD_CS 5

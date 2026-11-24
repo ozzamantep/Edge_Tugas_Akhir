@@ -4,11 +4,11 @@
  *            Inference di ESP32 (Bluino ESP32 IoT Starter Shield)
  * BOARD    : ESP32 DevKit V1 (30-Pin) pada Bluino ESP32 IoT Starter Shield
  * SENSOR   : MPU6050 (I2C 0x68, Akselerometer ax, ay, az dalam satuan g @ 50 Hz)
- * OUTPUT   : OLED SSD1306 128x64 (I2C 0x3C), Active Buzzer, MicroSD Card (SPI),
+ * OUTPUT   : 3 LED Indikator (Merah/Kuning/Hijau), Active Buzzer, MicroSD Card (SPI),
  *            dan Telemetri Cloud ke https://iot.reslab-csub.cloud/
  *
  * CATATAN KOMPILASI:
- * - Sketch ini mendukung library Adafruit_MPU6050 & Adafruit_SSD1306 bila sudah
+ * - Sketch ini mendukung library Adafruit_MPU6050 bila sudah
  *   terinstal, NAMUN juga memiliki driver I2C built-in (<Wire.h>) otomatis
  *   sehingga BISA LANGSUNG DI-COMPILE & DI-UPLOAD tanpa error meskipun library
  *   eksternal belum diinstal di Arduino IDE!
@@ -39,7 +39,6 @@
 #include "config.h"
 #include "model.h"
 #include "features.h"
-#include "oled.h"
 #include "sdlog.h"
 
 #if USE_ADAFRUIT_MPU6050
@@ -96,7 +95,6 @@ static bool mpu6050ReadAccelG(float& ax_g, float& ay_g, float& az_g) {
 #endif
 
 // Objek periferal
-OledDisplay oled;
 SdLogger sdLogger;
 
 // ============================================================================
@@ -358,7 +356,7 @@ void setup() {
     updateActivityLeds(0);
 #endif
 
-    // 1. Inisialisasi Bus I2C (dipakai bersama oleh MPU6050 0x68 dan OLED 0x3C)
+    // 1. Inisialisasi Bus I2C (MPU6050 0x68)
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
     Wire.setClock(I2C_CLOCK_HZ);
     delay(100);
@@ -376,19 +374,10 @@ void setup() {
     if (i2c_found == 0) Serial.print(F("TIDAK ADA"));
     Serial.println();
 
-    // 2. Inisialisasi OLED SSD1306 / SH1106
-    if (oled.begin()) {
-        Serial.printf("[OLED] Layar OLED siap pada alamat I2C 0x%02X.\n", oled.getAddress());
-    } else {
-        Serial.println(F("[OLED] Peringatan: OLED tidak ditemukan pada 0x3C maupun 0x3D!"));
-    }
-
-    // 3. Inisialisasi Sensor MPU6050 pada alamat 0x68
-    oled.showStatusMessage("CEK MPU6050 (0x68)...");
+    // 2. Inisialisasi Sensor MPU6050 pada alamat 0x68
 #if USE_ADAFRUIT_MPU6050
     if (!mpu.begin(MPU6050_I2C_ADDR, &Wire)) {
         Serial.println(F("[MPU6050] ERROR: Sensor MPU6050 tidak terdeteksi di 0x68!"));
-        oled.showStatusMessage("ERR: MPU6050 0x68", "CEK KONEKSI SHIELD");
         while (true) {
             delay(500);
         }
@@ -398,7 +387,6 @@ void setup() {
 #else
     if (!mpu6050InitDirect()) {
         Serial.println(F("[MPU6050] ERROR: Sensor MPU6050 tidak terdeteksi di 0x68!"));
-        oled.showStatusMessage("ERR: MPU6050 0x68", "CEK KONEKSI SHIELD");
         while (true) {
             delay(500);
         }
@@ -406,12 +394,10 @@ void setup() {
 #endif
     Serial.println(F("[MPU6050] Siap pada alamat 0x68 (Range: +/-4g, Filter: 21Hz)."));
 
-    // 4. Inisialisasi Micro SD Card (tetap lanjut berjalan walaupun SD tidak terpasang)
-    oled.showStatusMessage("CEK MICROSD CARD...");
+    // 3. Inisialisasi Micro SD Card (tetap lanjut berjalan walaupun SD tidak terpasang)
     sdLogger.begin();
 
-    // 5. Inisialisasi WiFi & Task Pengiriman IoT Non-blocking (Core 0)
-    oled.showStatusMessage("MULAI WIFI & EDGE ML", "SAMPLING 50 HZ...");
+    // 4. Inisialisasi WiFi & Task Pengiriman IoT Non-blocking (Core 0)
     startIoTNetwork();
 
     last_sample_us = micros();
@@ -514,22 +500,13 @@ void loop() {
 
     const uint32_t now_ms = millis();
 
-    // 5. Tampilkan di OLED SSD1306
-    oled.renderInference(
-        smoothed_pred,
-        confidence,
-        (WiFi.status() == WL_CONNECTED),
-        sdLogger.isReady(),
-        total_steps
-    );
-
-    // 6. Simpan log ke MicroSD Card
+    // 5. Simpan log ke MicroSD Card
     sdLogger.logInference(now_ms, smoothed_pred, raw_pred, confidence, probs, total_steps);
 
-    // 7. Jadwalkan pengiriman ke platform IoT (langsung dari .ino)
+    // 6. Jadwalkan pengiriman ke platform IoT (langsung dari .ino)
     iotEnqueue(now_ms, smoothed_pred, confidence, total_steps, features[20]);
 
-    // 8. Cetak ringkasan ke Serial Monitor
+    // 7. Cetak ringkasan ke Serial Monitor
     Serial.printf(
         "[EDGE-ML] t=%lums | Raw=%s | Smooth=%s | Conf=%.1f%% (D:%.2f J:%.2f L:%.2f) | SMA=%.2fg | Steps=%lu | dt=%luus\n",
         (unsigned long)now_ms,
