@@ -4,7 +4,7 @@
  *            Inference di ESP32 (Bluino ESP32 IoT Starter Shield)
  * BOARD    : ESP32 DevKit V1 (30-Pin) pada Bluino ESP32 IoT Starter Shield
  * SENSOR   : MPU6050 (I2C 0x68, Akselerometer ax, ay, az dalam satuan g @ 50 Hz)
- * OUTPUT   : 3 LED Indikator (Merah/Kuning/Hijau), Active Buzzer, MicroSD Card (SPI),
+ * OUTPUT   : OLED SSD1306 128x64 (I2C 0x3C), 3 LED Indikator (Merah/Kuning/Hijau), MicroSD Card (SPI),
  *            dan Telemetri Cloud ke https://iot.reslab-csub.cloud/
  *
  * CATATAN KOMPILASI:
@@ -39,6 +39,7 @@
 #include "config.h"
 #include "model.h"
 #include "features.h"
+#include "oled.h"
 #include "sdlog.h"
 
 #if USE_ADAFRUIT_MPU6050
@@ -95,6 +96,7 @@ static bool mpu6050ReadAccelG(float& ax_g, float& ay_g, float& az_g) {
 #endif
 
 // Objek periferal
+OledDisplay oled;
 SdLogger sdLogger;
 
 // ============================================================================
@@ -224,28 +226,11 @@ static float last_valid_az = 1.0f;
 static int pred_history[SMOOTHING_HISTORY_SIZE] = { 0, 0, 0 };
 static int pred_history_count = 0;
 static int pred_history_idx = 0;
-static int current_smoothed_activity = -1;
-
-// Indikator Buzzer non-blocking
-struct BuzzerPattern {
-    uint8_t beeps_remaining;
-    bool pin_state_high;
-    uint32_t next_toggle_ms;
-    uint16_t on_duration_ms;
-    uint16_t off_duration_ms;
-};
-static BuzzerPattern buzzerState = { 0, false, 0, 80, 80 };
 
 // Statistik langkah & waktu sampling
 static uint32_t total_steps = 0;
 static uint32_t last_sample_us = 0;
 
-/**
- * @brief Memicu pola beep non-blocking pada buzzer saat aktivitas berubah:
- *        - DIAM  (0): 1x beep pendek (60 ms)
- *        - JALAN (1): 2x beep sedang (80 ms)
- *        - LARI  (2): 3x beep cepat  (110 ms)
- */
 static void updateActivityLeds(int activity_id) {
 #if ENABLE_ACTIVITY_LEDS
     digitalWrite(PIN_LED_MERAH,  (activity_id == 0) ? HIGH : LOW);
@@ -253,52 +238,6 @@ static void updateActivityLeds(int activity_id) {
     digitalWrite(PIN_LED_HIJAU,  (activity_id == 2) ? HIGH : LOW);
 #else
     (void)activity_id;
-#endif
-}
-
-static void triggerBuzzerForActivity(int activity_id) {
-#if ENABLE_BUZZER
-    if (activity_id == 0) {
-        buzzerState.beeps_remaining = 1;
-        buzzerState.on_duration_ms = 60;
-        buzzerState.off_duration_ms = 60;
-    } else if (activity_id == 1) {
-        buzzerState.beeps_remaining = 2;
-        buzzerState.on_duration_ms = 80;
-        buzzerState.off_duration_ms = 70;
-    } else {
-        buzzerState.beeps_remaining = 3;
-        buzzerState.on_duration_ms = 110;
-        buzzerState.off_duration_ms = 60;
-    }
-    buzzerState.pin_state_high = true;
-    digitalWrite(PIN_BUZZER, HIGH);
-    buzzerState.next_toggle_ms = millis() + buzzerState.on_duration_ms;
-#else
-    (void)activity_id;
-#endif
-}
-
-static void updateBuzzerNonBlocking() {
-#if ENABLE_BUZZER
-    if (buzzerState.beeps_remaining == 0 && !buzzerState.pin_state_high) {
-        return;
-    }
-    const uint32_t now_ms = millis();
-    if ((int32_t)(now_ms - buzzerState.next_toggle_ms) >= 0) {
-        if (buzzerState.pin_state_high) {
-            digitalWrite(PIN_BUZZER, LOW);
-            buzzerState.pin_state_high = false;
-            buzzerState.beeps_remaining--;
-            if (buzzerState.beeps_remaining > 0) {
-                buzzerState.next_toggle_ms = now_ms + buzzerState.off_duration_ms;
-            }
-        } else if (buzzerState.beeps_remaining > 0) {
-            digitalWrite(PIN_BUZZER, HIGH);
-            buzzerState.pin_state_high = true;
-            buzzerState.next_toggle_ms = now_ms + buzzerState.on_duration_ms;
-        }
-    }
 #endif
 }
 
@@ -339,11 +278,6 @@ void setup() {
     Serial.println(F("  Board : Bluino ESP32 IoT Starter Shield"));
     Serial.println(F("========================================================"));
 
-#if ENABLE_BUZZER
-    pinMode(PIN_BUZZER, OUTPUT);
-    digitalWrite(PIN_BUZZER, LOW);
-#endif
-
 #if ENABLE_ACTIVITY_LEDS
     pinMode(PIN_LED_MERAH, OUTPUT);
     pinMode(PIN_LED_KUNING, OUTPUT);
@@ -356,7 +290,7 @@ void setup() {
     updateActivityLeds(0);
 #endif
 
-    // 1. Inisialisasi Bus I2C (MPU6050 0x68)
+    // 1. Inisialisasi Bus I2C (dipakai bersama oleh MPU6050 0x68 dan OLED 0x3C)
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
     Wire.setClock(I2C_CLOCK_HZ);
     delay(100);
@@ -374,10 +308,19 @@ void setup() {
     if (i2c_found == 0) Serial.print(F("TIDAK ADA"));
     Serial.println();
 
-    // 2. Inisialisasi Sensor MPU6050 pada alamat 0x68
+    // 2. Inisialisasi OLED SSD1306 / SH1106
+    if (oled.begin()) {
+        Serial.printf("[OLED] Layar OLED siap pada alamat I2C 0x%02X.\n", oled.getAddress());
+    } else {
+        Serial.println(F("[OLED] Peringatan: OLED tidak ditemukan pada 0x3C maupun 0x3D!"));
+    }
+
+    // 3. Inisialisasi Sensor MPU6050 pada alamat 0x68
+    oled.showStatusMessage("CEK MPU6050 (0x68)...");
 #if USE_ADAFRUIT_MPU6050
     if (!mpu.begin(MPU6050_I2C_ADDR, &Wire)) {
         Serial.println(F("[MPU6050] ERROR: Sensor MPU6050 tidak terdeteksi di 0x68!"));
+        oled.showStatusMessage("ERR: MPU6050 0x68", "CEK KONEKSI SHIELD");
         while (true) {
             delay(500);
         }
@@ -387,6 +330,7 @@ void setup() {
 #else
     if (!mpu6050InitDirect()) {
         Serial.println(F("[MPU6050] ERROR: Sensor MPU6050 tidak terdeteksi di 0x68!"));
+        oled.showStatusMessage("ERR: MPU6050 0x68", "CEK KONEKSI SHIELD");
         while (true) {
             delay(500);
         }
@@ -394,18 +338,18 @@ void setup() {
 #endif
     Serial.println(F("[MPU6050] Siap pada alamat 0x68 (Range: +/-4g, Filter: 21Hz)."));
 
-    // 3. Inisialisasi Micro SD Card (tetap lanjut berjalan walaupun SD tidak terpasang)
+    // 4. Inisialisasi Micro SD Card (tetap lanjut berjalan walaupun SD tidak terpasang)
+    oled.showStatusMessage("CEK MICROSD CARD...");
     sdLogger.begin();
 
-    // 4. Inisialisasi WiFi & Task Pengiriman IoT Non-blocking (Core 0)
+    // 5. Inisialisasi WiFi & Task Pengiriman IoT Non-blocking (Core 0)
+    oled.showStatusMessage("MULAI WIFI & EDGE ML", "SAMPLING 50 HZ...");
     startIoTNetwork();
 
     last_sample_us = micros();
 }
 
 void loop() {
-    updateBuzzerNonBlocking();
-
     // Penjadwalan sampling presisi 50 Hz (tiap 20.000 mikrodetik = 20 ms)
     const uint32_t now_us = micros();
     if ((uint32_t)(now_us - last_sample_us) < SAMPLE_INTERVAL_US) {
@@ -493,20 +437,24 @@ void loop() {
 
     updateActivityLeds(smoothed_pred);
 
-    if (smoothed_pred != current_smoothed_activity) {
-        current_smoothed_activity = smoothed_pred;
-        triggerBuzzerForActivity(smoothed_pred);
-    }
-
     const uint32_t now_ms = millis();
 
-    // 5. Simpan log ke MicroSD Card
+    // 5. Tampilkan di OLED SSD1306
+    oled.renderInference(
+        smoothed_pred,
+        confidence,
+        (WiFi.status() == WL_CONNECTED),
+        sdLogger.isReady(),
+        total_steps
+    );
+
+    // 6. Simpan log ke MicroSD Card
     sdLogger.logInference(now_ms, smoothed_pred, raw_pred, confidence, probs, total_steps);
 
-    // 6. Jadwalkan pengiriman ke platform IoT (langsung dari .ino)
+    // 7. Jadwalkan pengiriman ke platform IoT (langsung dari .ino)
     iotEnqueue(now_ms, smoothed_pred, confidence, total_steps, features[20]);
 
-    // 7. Cetak ringkasan ke Serial Monitor
+    // 8. Cetak ringkasan ke Serial Monitor
     Serial.printf(
         "[EDGE-ML] t=%lums | Raw=%s | Smooth=%s | Conf=%.1f%% (D:%.2f J:%.2f L:%.2f) | SMA=%.2fg | Steps=%lu | dt=%luus\n",
         (unsigned long)now_ms,
